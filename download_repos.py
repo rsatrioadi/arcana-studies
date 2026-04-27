@@ -28,7 +28,6 @@ import urllib.request
 import zipfile
 from pathlib import Path
 
-
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
@@ -40,6 +39,7 @@ CSV_DEFAULT = Path(__file__).parent / "repos.csv"
 # ---------------------------------------------------------------------------
 # Argument parsing
 # ---------------------------------------------------------------------------
+
 
 def parse_args():
     parser = argparse.ArgumentParser(
@@ -60,8 +60,8 @@ def parse_args():
         default=Path("repos"),
         metavar="DIR",
         help="Root output directory (default: ./repos). "
-             "Zips go into <DIR>/zips/<language>/, "
-             "extracted repos into <DIR>/src/<language>/.",
+        "Zips go into <DIR>/zips/<language>/, "
+        "extracted repos into <DIR>/src/<language>/.",
     )
     parser.add_argument(
         "--lang",
@@ -69,7 +69,7 @@ def parse_args():
         default=["java"],
         metavar="LANG",
         help="Language(s) to download: java, c#, c++, all "
-             "(case-insensitive, default: java)",
+        "(case-insensitive, default: java)",
     )
     parser.add_argument(
         "--delay",
@@ -77,7 +77,7 @@ def parse_args():
         default=2.0,
         metavar="SECS",
         help="Base delay between downloads in seconds (default: 2.0). "
-             "Actual delay is jittered ±30%% to be polite.",
+        "Actual delay is jittered ±30%% to be polite.",
     )
     parser.add_argument(
         "--limit",
@@ -150,6 +150,7 @@ def parse_args():
 # CSV loading and filtering
 # ---------------------------------------------------------------------------
 
+
 def load_repos(csv_path: Path, langs: set[str], args) -> list[dict]:
     """Load and filter repos from CSV."""
     if not csv_path.exists():
@@ -183,19 +184,44 @@ def load_repos(csv_path: Path, langs: set[str], args) -> list[dict]:
 # Path helpers
 # ---------------------------------------------------------------------------
 
+
+def lang_slug(row: dict) -> str:
+    return row["language"].lower().replace("+", "p").replace("#", "sharp")
+
+
 def zip_path(output_dir: Path, row: dict) -> Path:
-    lang_slug = row["language"].lower().replace("+", "p").replace("#", "sharp")
-    return output_dir / "zips" / lang_slug / f"{row['name']}__{row['sha'][:12]}.zip"
+    slug = f"{row['owner']}__{row['name']}__{row['sha'][:12]}.zip"
+    return output_dir / "zips" / lang_slug(row) / slug
 
 
 def extract_dir(output_dir: Path, row: dict) -> Path:
-    lang_slug = row["language"].lower().replace("+", "p").replace("#", "sharp")
-    return output_dir / "src" / lang_slug / row["name"]
+    return output_dir / "src" / lang_slug(row) / f"{row['owner']}__{row['name']}"
+
+
+def sentinel_path(ed: Path) -> Path:
+    """Marker file written only after a fully successful extraction."""
+    return ed / ".extracted_ok"
+
+
+def is_extracted(ed: Path) -> bool:
+    return sentinel_path(ed).exists()
+
+
+def cleanup_partial_downloads(output_dir: Path):
+    """Remove .part files left by previously interrupted downloads."""
+    part_files = list(output_dir.glob("zips/**/*.part"))
+    if part_files:
+        print(f"Cleaning up {len(part_files)} interrupted download(s):")
+        for p in part_files:
+            print(f"  removing {p}")
+            p.unlink(missing_ok=True)
+        print()
 
 
 # ---------------------------------------------------------------------------
 # Download
 # ---------------------------------------------------------------------------
+
 
 def download_url_for(row: dict) -> str:
     """
@@ -222,8 +248,7 @@ def download_zip(url: str, dest: Path, retries: int = 3) -> bool:
                 url,
                 headers={"User-Agent": "stereocode-benchmark-downloader/1.0"},
             )
-            with urllib.request.urlopen(req, timeout=60) as resp, \
-                 open(part, "wb") as f:
+            with urllib.request.urlopen(req, timeout=60) as resp, open(part, "wb") as f:
                 total = int(resp.headers.get("Content-Length", 0))
                 downloaded = 0
                 chunk = 65536
@@ -235,13 +260,17 @@ def download_zip(url: str, dest: Path, retries: int = 3) -> bool:
                     downloaded += len(data)
                     if total:
                         pct = downloaded * 100 // total
-                        print(f"\r    {pct:3d}% ({downloaded // 1024} KB)", end="", flush=True)
+                        print(
+                            f"\r    {pct:3d}% ({downloaded // 1024} KB)",
+                            end="",
+                            flush=True,
+                        )
             print()
             part.rename(dest)
             return True
 
         except urllib.error.HTTPError as e:
-            if e.code in (404, 451):           # permanent failures
+            if e.code in (404, 451):  # permanent failures
                 print(f"    HTTP {e.code} — skipping {url}")
                 part.unlink(missing_ok=True)
                 return False
@@ -260,24 +289,35 @@ def download_zip(url: str, dest: Path, retries: int = 3) -> bool:
 # Extraction worker
 # ---------------------------------------------------------------------------
 
+
 def extraction_worker(queue: multiprocessing.Queue, output_dir: Path):
     """
     Runs in a separate process. Pulls (zip_path, extract_dir) tuples off the
     queue and extracts them. Sentinel value None signals shutdown.
+
+    If the target directory exists but lacks the sentinel file, it was only
+    partially extracted — it is wiped and re-extracted cleanly.
     """
+    import shutil
+
     while True:
         item = queue.get()
         if item is None:
             break
         zp, ed = item
         try:
+            # Wipe incomplete extraction if sentinel is missing
+            if ed.exists() and not is_extracted(ed):
+                print(f"  [extract] partial extraction detected, wiping {ed.name}")
+                shutil.rmtree(ed)
+
             ed.mkdir(parents=True, exist_ok=True)
             with zipfile.ZipFile(zp, "r") as zf:
                 # GitHub zips have a single top-level dir; strip it
                 members = zf.namelist()
                 prefix = members[0] if members else ""
                 for member in members:
-                    rel = member[len(prefix):]
+                    rel = member[len(prefix) :]
                     if not rel:
                         continue
                     target = ed / rel
@@ -287,6 +327,9 @@ def extraction_worker(queue: multiprocessing.Queue, output_dir: Path):
                         target.parent.mkdir(parents=True, exist_ok=True)
                         with zf.open(member) as src, open(target, "wb") as dst:
                             dst.write(src.read())
+
+            # Write sentinel only after every file is in place
+            sentinel_path(ed).touch()
             print(f"  [extract] ✓ {ed.name}")
         except Exception as e:
             print(f"  [extract] ✗ {ed.name}: {e}")
@@ -295,6 +338,7 @@ def extraction_worker(queue: multiprocessing.Queue, output_dir: Path):
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
+
 
 def main():
     args = parse_args()
@@ -305,11 +349,16 @@ def main():
         selected = VALID_LANGUAGES
     unknown = selected - VALID_LANGUAGES
     if unknown:
-        sys.exit(f"Error: unknown language(s): {unknown}. Valid: {VALID_LANGUAGES | {'all'}}")
+        sys.exit(
+            f"Error: unknown language(s): {unknown}. Valid: {VALID_LANGUAGES | {'all'}}"
+        )
 
     print(f"Languages : {', '.join(sorted(selected))}")
     print(f"CSV       : {args.csv}")
     print(f"Output    : {args.output_dir}")
+
+    if not args.dry_run:
+        cleanup_partial_downloads(args.output_dir)
 
     repos = load_repos(args.csv, selected, args)
     print(f"Repos     : {len(repos)} after filters")
@@ -335,8 +384,10 @@ def main():
         ed = extract_dir(args.output_dir, row)
         loc = int(row.get("loc") or 0)
 
-        if ed.exists():
+        if is_extracted(ed):
             status = "already extracted"
+        elif ed.exists():
+            status = "partial extraction (will re-extract)"
         elif zp.exists():
             status = "zip exists (pending extract)"
         else:
@@ -346,8 +397,10 @@ def main():
         print(f"{i:>4}  {row['name']:<35} {row['language']:<6} {loc:>8,}  {status}")
 
     print()
-    print(f"{len(to_download)} repos to download, "
-          f"{len(repos) - len(to_download)} already present.")
+    print(
+        f"{len(to_download)} repos to download, "
+        f"{len(repos) - len(to_download)} already present."
+    )
 
     if args.dry_run:
         print("\n[dry-run] No files written.")
@@ -376,7 +429,7 @@ def main():
         for row in repos:
             zp = zip_path(args.output_dir, row)
             ed = extract_dir(args.output_dir, row)
-            if zp.exists() and not ed.exists():
+            if zp.exists() and not is_extracted(ed):
                 extract_queue.put((zp, ed))
 
     # Download loop
@@ -386,8 +439,10 @@ def main():
         ed = extract_dir(args.output_dir, row)
         url = download_url_for(row)
 
-        print(f"[{idx}/{len(to_download)}] {row['name']} ({row['language']}) "
-              f"— SHA {row['sha'][:12]}")
+        print(
+            f"[{idx}/{len(to_download)}] {row['name']} ({row['language']}) "
+            f"— SHA {row['sha'][:12]}"
+        )
         print(f"    {url}")
 
         ok = download_zip(url, zp, retries=args.retries)
@@ -414,8 +469,7 @@ def main():
 
     # Final report
     print("\n" + "=" * 50)
-    print(f"Done. {len(to_download) - len(failed)} downloaded, "
-          f"{len(failed)} failed.")
+    print(f"Done. {len(to_download) - len(failed)} downloaded, {len(failed)} failed.")
     if failed:
         print("Failed repos:")
         for name in failed:
