@@ -31,11 +31,27 @@ from pathlib import Path
 
 # Directories whose subtrees are unconditionally ignored.
 PRUNE_DIRS = {
-    "target", "build", "out", "dist", "bin", "output",
-    ".gradle", ".mvn", "generated", "generated-sources",
-    "generated-test-sources", "apt-generated", "node_modules",
-    "vendor", ".git", ".idea", ".vscode", "__pycache__",
-    "test-output", "site", "reports",
+    "target",
+    "build",
+    "out",
+    "dist",
+    "bin",
+    "output",
+    ".gradle",
+    ".mvn",
+    "generated",
+    "generated-sources",
+    "generated-test-sources",
+    "apt-generated",
+    "node_modules",
+    "vendor",
+    ".git",
+    ".idea",
+    ".vscode",
+    "__pycache__",
+    "test-output",
+    "site",
+    "reports",
 }
 
 # Path segment patterns that mark test source trees.
@@ -57,6 +73,7 @@ MIN_FILES = 2
 # Argument parsing
 # ---------------------------------------------------------------------------
 
+
 def parse_args():
     p = argparse.ArgumentParser(
         description="Find Java source roots in extracted repos and write CSV.",
@@ -68,8 +85,7 @@ def parse_args():
         type=Path,
         required=True,
         metavar="DIR",
-        help="Directory containing owner__repo subdirectories "
-             "(e.g. repos/src/java).",
+        help="Directory containing owner__repo subdirectories (e.g. repos/src/java).",
     )
     p.add_argument(
         "--output",
@@ -107,6 +123,7 @@ def parse_args():
 # File walking
 # ---------------------------------------------------------------------------
 
+
 def is_pruned(path: Path, repo_root: Path) -> bool:
     """True if any segment of path (relative to repo_root) is a prune target."""
     try:
@@ -131,13 +148,11 @@ def iter_java_files(repo_root: Path):
     skipping pruned subtrees efficiently via os.walk.
     """
     import os
+
     for dirpath, dirnames, filenames in os.walk(repo_root):
         dp = Path(dirpath)
         # Prune in-place so os.walk doesn't descend into excluded dirs
-        dirnames[:] = [
-            d for d in dirnames
-            if d.lower() not in PRUNE_DIRS
-        ]
+        dirnames[:] = [d for d in dirnames if d.lower() not in PRUNE_DIRS]
         if is_pruned(dp, repo_root):
             dirnames.clear()
             continue
@@ -151,6 +166,7 @@ def iter_java_files(repo_root: Path):
 # Package parsing
 # ---------------------------------------------------------------------------
 
+
 def read_package(java_file: Path) -> str | None:
     """Return the package name declared in java_file, or None."""
     try:
@@ -162,7 +178,10 @@ def read_package(java_file: Path) -> str | None:
                 if m:
                     return m.group(1).strip()
                 # Stop early on class/interface/enum/import lines if no package found yet
-                if re.match(r"^\s*(public|private|protected|import|class|interface|enum|@)", line):
+                if re.match(
+                    r"^\s*(public|private|protected|import|class|interface|enum|@)",
+                    line,
+                ):
                     if i > 0:  # give the very first line benefit of the doubt
                         break
     except OSError:
@@ -173,6 +192,7 @@ def read_package(java_file: Path) -> str | None:
 # ---------------------------------------------------------------------------
 # Root computation
 # ---------------------------------------------------------------------------
+
 
 def compute_root(java_file: Path, package: str) -> Path | None:
     """
@@ -201,6 +221,7 @@ def compute_root(java_file: Path, package: str) -> Path | None:
 # Root discovery for one repo
 # ---------------------------------------------------------------------------
 
+
 def find_roots(repo_root: Path, include_tests: bool, min_files: int, verbose: bool):
     """
     Returns (main_roots, test_roots) — each a sorted list of Path objects
@@ -225,8 +246,10 @@ def find_roots(repo_root: Path, include_tests: bool, min_files: int, verbose: bo
                 votes[root] += 1
             else:
                 if verbose:
-                    print(f"    [mismatch] {java_file.relative_to(repo_root)} "
-                          f"package={pkg}")
+                    print(
+                        f"    [mismatch] {java_file.relative_to(repo_root)} "
+                        f"package={pkg}"
+                    )
         else:
             # No package: candidate root is immediate parent
             nopack[java_file.parent] += 1
@@ -253,8 +276,16 @@ def find_roots(repo_root: Path, include_tests: bool, min_files: int, verbose: bo
     test_roots = filter_roots(test_votes)
 
     if verbose:
-        print(f"  main votes: { {str(k.relative_to(repo_root)): v for k, v in sorted(main_votes.items(), key=lambda x: str(x[0]))} }")
-        print(f"  test votes: { {str(k.relative_to(repo_root)): v for k, v in sorted(test_votes.items(), key=lambda x: str(x[0]))} }")
+        print(
+            f"  main votes: { {str(k.relative_to(repo_root)): v for k, v in sorted(main_votes.items(), key=lambda x: (
+                        str(x[0])
+                    ))} }"
+        )
+        print(
+            f"  test votes: { {str(k.relative_to(repo_root)): v for k, v in sorted(test_votes.items(), key=lambda x: (
+                        str(x[0])
+                    ))} }"
+        )
 
     return main_roots, test_roots
 
@@ -262,6 +293,7 @@ def find_roots(repo_root: Path, include_tests: bool, min_files: int, verbose: bo
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
+
 
 def main():
     args = parse_args()
@@ -276,66 +308,104 @@ def main():
             sys.exit(f"Error: repo not found: {repo_dirs[0]}")
     else:
         repo_dirs = sorted(
-            d for d in args.src_dir.iterdir()
+            d
+            for d in args.src_dir.iterdir()
             if d.is_dir() and not d.name.startswith(".")
         )
 
-    print(f"Scanning {len(repo_dirs)} repo(s) under {args.src_dir}")
+    # --- Resume: load already-processed repos from existing CSV ---
+    already_done: set[str] = set()
+    args.output.parent.mkdir(parents=True, exist_ok=True)
+    if args.output.exists():
+        with open(args.output, newline="", encoding="utf-8") as f:
+            reader = csv.DictReader(f)
+            if reader.fieldnames and "repo" in reader.fieldnames:
+                already_done = {row["repo"] for row in reader}
+        if already_done:
+            print(
+                f"Resuming: {len(already_done)} repo(s) already in {args.output}, skipping."
+            )
+
+    pending = [d for d in repo_dirs if d.name not in already_done]
+
+    print(
+        f"Scanning {len(repo_dirs)} repo(s) under {args.src_dir} "
+        f"({len(pending)} remaining)"
+    )
     print(f"Output  : {args.output}")
     print(f"Min files per root: {args.min_files}")
     if args.include_tests:
         print("Test roots: included")
     print()
 
-    rows = []
+    # Open CSV in append mode; write header only if file is new/empty
+    write_header = not args.output.exists() or args.output.stat().st_size == 0
+    csv_file = open(args.output, "a", newline="", encoding="utf-8")
+    writer = csv.writer(csv_file, quoting=csv.QUOTE_MINIMAL)
+    if write_header:
+        writer.writerow(["repo", "source_paths"])
+        csv_file.flush()
+
+    written = 0
     skipped = []
 
-    for repo_dir in repo_dirs:
-        repo_name = repo_dir.name
-        if args.verbose:
-            print(f"[{repo_name}]")
-
-        main_roots, test_roots = find_roots(
-            repo_dir,
-            include_tests=args.include_tests,
-            min_files=args.min_files,
-            verbose=args.verbose,
-        )
-
-        all_roots = main_roots[:]
-        if args.include_tests:
-            all_roots += [r for r in test_roots if r not in main_roots]
-
-        if not all_roots:
-            skipped.append(repo_name)
+    try:
+        for idx, repo_dir in enumerate(pending, 1):
+            repo_name = repo_dir.name
             if args.verbose:
-                print(f"  → no roots found\n")
-            continue
+                print(f"[{idx}/{len(pending)}] {repo_name}")
+            else:
+                print(f"[{idx}/{len(pending)}] {repo_name}", end=" ... ", flush=True)
 
-        # Make paths relative to the src_dir (so they're portable)
-        rel_roots = [str(r.relative_to(args.src_dir)) for r in all_roots]
-        joined = "+".join(rel_roots)
+            main_roots, test_roots = find_roots(
+                repo_dir,
+                include_tests=args.include_tests,
+                min_files=args.min_files,
+                verbose=args.verbose,
+            )
 
-        rows.append((repo_name, joined))
+            all_roots = main_roots[:]
+            if args.include_tests:
+                all_roots += [r for r in test_roots if r not in main_roots]
 
-        if args.verbose:
-            for r in rel_roots:
-                tag = "(test)" if r in [str(x.relative_to(args.src_dir)) for x in test_roots] else ""
-                print(f"  → {r} {tag}")
-            print()
+            if not all_roots:
+                skipped.append(repo_name)
+                if args.verbose:
+                    print(f"  → no roots found\n")
+                else:
+                    print("no roots")
+                # Write a row with empty source_paths so this repo is marked
+                # done and won't be re-scanned on resume.
+                writer.writerow([repo_name, ""])
+                csv_file.flush()
+                continue
 
-    # Write CSV
-    args.output.parent.mkdir(parents=True, exist_ok=True)
-    with open(args.output, "w", newline="", encoding="utf-8") as f:
-        writer = csv.writer(f, quoting=csv.QUOTE_MINIMAL)
-        writer.writerow(["repo", "source_paths"])
-        writer.writerows(rows)
+            rel_roots = [str(r.relative_to(args.src_dir)) for r in all_roots]
+            joined = "+".join(rel_roots)
 
-    print(f"Written {len(rows)} repos to {args.output}")
+            writer.writerow([repo_name, joined])
+            csv_file.flush()
+            written += 1
+
+            if args.verbose:
+                for r in rel_roots:
+                    tag = (
+                        "(test)"
+                        if r in [str(x.relative_to(args.src_dir)) for x in test_roots]
+                        else ""
+                    )
+                    print(f"  → {r} {tag}")
+                print()
+            else:
+                print(f"{len(rel_roots)} root(s)")
+
+    finally:
+        csv_file.close()
+
+    print(f"\nDone. {written} repos written, {len(skipped)} with no roots found.")
     if skipped:
-        print(f"Skipped (no roots found): {len(skipped)}")
         for name in skipped:
-            print(f"  {name}")
+            print(f"  (no roots) {name}")
 
 
 if __name__ == "__main__":
