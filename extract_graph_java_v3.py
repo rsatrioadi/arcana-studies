@@ -1,23 +1,23 @@
 #!/usr/bin/env python3
 """
-extract_graph_csharp.py — Run an indexer executable over every repo in a source directory.
+extract_graph_java_v3.py — Run an indexer executable over every repo in a source directory.
 
 For each subdirectory <repo> under <sources>, executes:
 
-    <exe> index <sources>/<repo> -o <output_dir>/<repo>.json
+    java -jar <jar> -f json -i <sources>/<repo> -o <output_dir> -n <repo>
 
 Resume: skips repos whose output file already exists.
 Failures are logged to <output_dir>/_failed.txt.
 
 Usage:
-  python extract_graph_csharp.py --exe ./mytool --sources repos/src/csharp --output-dir results
-  python extract_graph_csharp.py --exe ./mytool --sources repos/src/csharp --output-dir results \\
+  python extract_graph_java_v3.py --exe ./javapers.jar --sources repos/src/java --output-dir results
+  python extract_graph_java_v3.py --exe ./javapers.jar --sources repos/src/java --output-dir results \\
       --timeout 300 --delay 0.5
-  python extract_graph_csharp.py --exe ./mytool --sources repos/src/csharp --output-dir results \\
+  python extract_graph_java_v3.py --exe ./javapers.jar --sources repos/src/java --output-dir results \\
       --retry-failed
-  python extract_graph_csharp.py --exe ./mytool --sources repos/src/csharp --output-dir results \\
+  python extract_graph_java_v3.py --exe ./javapers.jar --sources repos/src/java --output-dir results \\
       --only owner__repoA owner__repoB
-  python extract_graph_csharp.py --exe ./mytool --sources repos/src/csharp --output-dir results \\
+  python extract_graph_java_v3.py --exe ./javapers.jar --sources repos/src/java --output-dir results \\
       --dry-run
 """
 
@@ -40,11 +40,11 @@ def parse_args():
         epilog=__doc__,
     )
     p.add_argument(
-        "--exe",
+        "--jar",
         type=Path,
         required=True,
         metavar="FILE",
-        help="Executable to run (e.g. ./saboroot or /usr/local/bin/mytool).",
+        help="JARf file to run (e.g. ./javapers.jar).",
     )
     p.add_argument(
         "--sources",
@@ -125,8 +125,8 @@ def remove_from_failed(output_dir: Path, repo: str):
 def main():
     args = parse_args()
 
-    if not args.exe.exists():
-        sys.exit(f"Error: executable not found: {args.exe}")
+    if not args.jar.exists():
+        sys.exit(f"Error: JAR file not found: {args.jar}")
     if not args.sources.is_dir():
         sys.exit(f"Error: --sources not found: {args.sources}")
 
@@ -180,13 +180,19 @@ def main():
 
     for idx, repo_dir in enumerate(to_run, 1):
         repo = repo_dir.name
-        out = args.output_dir / f"{repo}.json"
-        cmd = [
-            str(args.exe.resolve()),
-            "index",
+        out = args.output_dir
+        cmd = [  # java -jar <jar> -f json -i <sources>/<repo> -o <output_dir> -n <repo>
+            "java",
+            "-jar",
+            str(args.jar.resolve()),
+            "-f",
+            "json",
+            "-i",
             str(repo_dir.resolve()),
             "-o",
             str(out.resolve()),
+            "-n",
+            repo,
         ]
 
         print(f"[{idx}/{len(to_run)}] {repo}", end=" … ", flush=True)
@@ -220,7 +226,7 @@ def main():
             failed += 1
             append_failed(args.output_dir, repo)
         except FileNotFoundError as e:
-            print(f"✗ executable not found: {e}")
+            print(f"✗ JAR file not found: {e}")
             failed += 1
             append_failed(args.output_dir, repo)
             break  # no point continuing if the exe is missing
