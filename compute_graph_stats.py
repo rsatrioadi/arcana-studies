@@ -243,6 +243,22 @@ def process_graph(path: pathlib.Path, lang: str, repo: str, subrepo: Optional[st
     file_req_out = out_deg(file_nodes, "requires")
     file_req_in  = in_deg(file_nodes, "requires")
 
+    # ── scope fanouts (logical) ───────────────────────────────────────────
+    scope_to_scope_fanout = []
+    scope_to_type_fanout = []
+    for nid in scope_nodes:
+        enclosed = out_adj[nid]["encloses"]
+        scope_to_scope_fanout.append(sum(1 for tid in enclosed if tid in scope_nodes))
+        scope_to_type_fanout.append(sum(1 for tid in enclosed if tid in type_nodes))
+
+    # ── folder fanouts (physical) ─────────────────────────────────────────
+    folder_to_folder_fanout = []
+    folder_to_file_fanout   = []
+    for nid in folder_nodes:
+        contained = out_adj[nid]["contains"]
+        folder_to_folder_fanout.append(sum(1 for tid in contained if tid in folder_nodes))
+        folder_to_file_fanout.append(sum(1 for tid in contained if tid in file_nodes))
+
     # ── Hierarchy depths ───────────────────────────────────────────────────
 
     # File-system depth: Project -[includes]→ Folder -[contains]→ ... -[contains]→ File
@@ -367,6 +383,22 @@ def process_graph(path: pathlib.Path, lang: str, repo: str, subrepo: Optional[st
         # --- hierarchy depths ---
         "fs_depth_max":    F(fs_depth_max),
         "scope_depth_max": F(scope_depth_max),  # empty if no Scope nodes
+
+        # --- scope fanouts ---
+        "scope_to_scope_fanout_mean": F(smean(scope_to_scope_fanout)),
+        "scope_to_scope_fanout_p90":  F(sp90(scope_to_scope_fanout)),
+        "scope_to_scope_fanout_max":  F(smax(scope_to_scope_fanout)),
+        "scope_to_type_fanout_mean":  F(smean(scope_to_type_fanout)),
+        "scope_to_type_fanout_p90":   F(sp90(scope_to_type_fanout)),
+        "scope_to_type_fanout_max":   F(smax(scope_to_type_fanout)),
+
+        # --- folder fanouts ---
+        "folder_to_folder_fanout_mean": F(smean(folder_to_folder_fanout)),
+        "folder_to_folder_fanout_p90":  F(sp90(folder_to_folder_fanout)),
+        "folder_to_folder_fanout_max":  F(smax(folder_to_folder_fanout)),
+        "folder_to_file_fanout_mean":   F(smean(folder_to_file_fanout)),
+        "folder_to_file_fanout_p90":    F(sp90(folder_to_file_fanout)),
+        "folder_to_file_fanout_max":    F(smax(folder_to_file_fanout)),
 
         # --- NumMethods (from measures) ---
         "num_methods_mean":   F(smean(num_methods_vals)),
