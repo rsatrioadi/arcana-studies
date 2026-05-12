@@ -216,7 +216,7 @@ def main():
                     remove_from_failed(args.output_dir, repo)
             else:
                 detail = (result.stderr or result.stdout or "").strip()
-                short = detail[:200] + ("…" if len(detail) > 200 else "")
+                short = ("…" if len(detail) > 2000 else "") + detail[-2000:]
                 print(f"✗ exit {result.returncode}: {short}")
                 failed += 1
                 append_failed(args.output_dir, repo)
