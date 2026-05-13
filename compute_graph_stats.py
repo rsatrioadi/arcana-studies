@@ -52,6 +52,9 @@ STRUCTURAL_EDGE_SET = frozenset(ALL_STRUCTURAL_EDGE_LABELS)
 # reliability / coverage signal.
 COVERAGE_EDGES = ("requires", "specializes", "instantiates", "typed")
 
+# Ordered profile names matching Category node simpleName values.
+PROFILE_LABELS = ("inbound", "outbound", "transit", "hidden")
+
 # Halstead property keys stored on measures edges.
 HALSTEAD_KEYS = ("vocabulary", "length", "volume", "difficulty", "effort", "estimatedBugs")
 
@@ -76,6 +79,10 @@ def sp90(values):
     s = sorted(values)
     idx = max(0, math.ceil(0.9 * len(s)) - 1)
     return s[idx]
+
+def _shannon_entropy(fracs):
+    """Shannon entropy (bits) of a probability vector; zero-valued components are skipped."""
+    return -sum(p * math.log2(p) for p in fracs if p > 0)
 
 
 # ── BFS helpers ─────────────────────────────────────────────────────────────
@@ -314,6 +321,48 @@ def process_graph(path: pathlib.Path, lang: str, repo: str, subrepo: Optional[st
                     if val is not None:
                         halstead[key].append(val)
 
+    # ── Dependency profiles ────────────────────────────────────────────────
+    # Discover profile categories dynamically from Category nodes whose
+    # kind == "dependency profile"; avoids hardcoding dp:* IDs.
+    profile_cat_ids = {
+        nid: nd["properties"].get("simpleName", "").lower()
+        for nid, nd in node_by_id.items()
+        if "Category" in nd.get("labels", [])
+        and nd.get("properties", {}).get("kind", "") == "dependency profile"
+    }
+
+    # type_id → profile name, via implements edges to a profile category.
+    type_to_profile = {}
+    for e in raw_edges:
+        d = e["data"]
+        if d["label"] == "implements" and d["target"] in profile_cat_ids:
+            type_to_profile[d["source"]] = profile_cat_ids[d["target"]]
+
+    prof_type_counts = collections.Counter(type_to_profile.values())
+    n_classified = sum(prof_type_counts.values())
+
+    # Per-package profile vectors (only scopes with ≥1 classified type).
+    pkg_fracs = {p: [] for p in PROFILE_LABELS}
+    pkg_entropies = []
+    pkg_dominant = []
+
+    for nid in scope_nodes:
+        enclosed_types = [t for t in out_adj[nid]["encloses"] if t in type_nodes]
+        classified = [type_to_profile[t] for t in enclosed_types if t in type_to_profile]
+        if not classified:
+            continue
+        total = len(classified)
+        cnt = collections.Counter(classified)
+        fracs = {p: cnt[p] / total for p in PROFILE_LABELS}
+        for p in PROFILE_LABELS:
+            pkg_fracs[p].append(fracs[p])
+        pkg_entropies.append(_shannon_entropy(fracs.values()))
+        # Dominant profile; tie-break alphabetically (hidden < inbound < outbound < transit).
+        pkg_dominant.append(min(PROFILE_LABELS, key=lambda p: (-fracs[p], p)))
+
+    dominant_counts = collections.Counter(pkg_dominant)
+    n_pkg_with_profile = len(pkg_dominant)
+
     # ── Coverage flags ─────────────────────────────────────────────────────
     coverage = {lbl: int(struct_edge_counts[lbl] > 0) for lbl in COVERAGE_EDGES}
 
@@ -418,6 +467,25 @@ def process_graph(path: pathlib.Path, lang: str, repo: str, subrepo: Optional[st
 
         # --- Coverage / reliability flags ---
         **{f"coverage_{lbl}": coverage[lbl] for lbl in COVERAGE_EDGES},
+
+        # --- Dependency profiles (type-level counts) ---
+        "n_type_inbound":      prof_type_counts["inbound"],
+        "n_type_outbound":     prof_type_counts["outbound"],
+        "n_type_transit":      prof_type_counts["transit"],
+        "n_type_hidden":       prof_type_counts["hidden"],
+        "pct_type_classified": F(n_classified / n["n_type"] if n["n_type"] else None),
+
+        # --- Dependency profiles (package-level fractions, aggregated) ---
+        **{f"pkg_pct_{p}_mean": F(smean(pkg_fracs[p])) for p in PROFILE_LABELS},
+        **{f"pkg_pct_{p}_max":  F(smax(pkg_fracs[p]))  for p in PROFILE_LABELS},
+
+        # --- Package profile entropy ---
+        "pkg_profile_entropy_mean": F(smean(pkg_entropies)),
+
+        # --- Dominant-role distribution (fraction of qualifying packages) ---
+        **{f"pct_pkg_dominant_{p}":
+           F(dominant_counts[p] / n_pkg_with_profile if n_pkg_with_profile else None)
+           for p in PROFILE_LABELS},
     }
 
     return row, all_edge_counts
