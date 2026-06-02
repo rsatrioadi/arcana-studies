@@ -30,7 +30,7 @@ import sys
 import time
 from pathlib import Path
 
-CPPPERS = Path.home() / "Code" / "cpppers"
+CPPPERS_DEFAULT = Path.home() / "Code" / "cpppers"
 
 # ---------------------------------------------------------------------------
 # Argument parsing
@@ -42,6 +42,13 @@ def parse_args():
         description="Run cpppers over every repo in a source directory.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__,
+    )
+    p.add_argument(
+        "--exe",
+        type=Path,
+        default=CPPPERS_DEFAULT,
+        metavar="FILE",
+        help=f"Path to the cpppers binary (default: {CPPPERS_DEFAULT}).",
     )
     p.add_argument(
         "--sources",
@@ -122,8 +129,8 @@ def remove_from_failed(output_dir: Path, repo: str):
 def main():
     args = parse_args()
 
-    if not CPPPERS.exists():
-        sys.exit(f"Error: cpppers not found: {CPPPERS}")
+    if not args.exe.exists():
+        sys.exit(f"Error: cpppers not found: {args.exe}")
     if not args.sources.is_dir():
         sys.exit(f"Error: --sources not found: {args.sources}")
 
@@ -157,7 +164,7 @@ def main():
         else:
             to_run.append(repo_dir)
 
-    print(f"cpppers       : {CPPPERS}")
+    print(f"cpppers       : {args.exe}")
     print(f"Sources       : {args.sources}  ({len(all_repos)} repo dirs)")
     print(f"Output dir    : {args.output_dir}")
     print(f"Already done  : {already_done}")
@@ -180,10 +187,11 @@ def main():
         repo = repo_dir.name
         out = args.output_dir / f"{repo}.json"
         cmd = [
-            str(CPPPERS.resolve()),
+            str(args.exe.resolve()),
             "--name", repo,
             "--format", "cyjson",
             "--no-compile-commands",
+            "--output-dir", str(args.output_dir.resolve()),
             str(repo_dir.resolve()),
         ]
 
@@ -202,7 +210,6 @@ def main():
                 text=True,
             )
             if result.returncode == 0:
-                out.write_text(result.stdout, encoding="utf-8")
                 print("✓")
                 succeeded += 1
                 if repo in force_set:
