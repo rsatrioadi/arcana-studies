@@ -91,6 +91,12 @@ def parse_args():
         "ignoring existing output files for those repos.",
     )
     p.add_argument(
+        "--retry-timeout",
+        action="store_true",
+        help="Re-run repos in <output_dir>/_failed_timeout.txt, "
+        "ignoring existing output files for those repos.",
+    )
+    p.add_argument(
         "--dry-run", action="store_true", help="Print commands without executing them."
     )
     return p.parse_args()
@@ -101,20 +107,20 @@ def parse_args():
 # ---------------------------------------------------------------------------
 
 
-def load_failed(output_dir: Path) -> set[str]:
-    f = output_dir / "_failed.txt"
+def load_failed(output_dir: Path, filename: str = "_failed.txt") -> set[str]:
+    f = output_dir / filename
     if not f.exists():
         return set()
     return {l.strip() for l in f.read_text(encoding="utf-8").splitlines() if l.strip()}
 
 
-def append_failed(output_dir: Path, repo: str):
-    with open(output_dir / "_failed.txt", "a", encoding="utf-8") as f:
+def append_failed(output_dir: Path, repo: str, filename: str = "_failed.txt"):
+    with open(output_dir / filename, "a", encoding="utf-8") as f:
         f.write(repo + "\n")
 
 
-def remove_from_failed(output_dir: Path, repo: str):
-    f = output_dir / "_failed.txt"
+def remove_from_failed(output_dir: Path, repo: str, filename: str = "_failed.txt"):
+    f = output_dir / filename
     if not f.exists():
         return
     lines = [l for l in f.read_text().splitlines() if l.strip() and l.strip() != repo]
@@ -148,11 +154,14 @@ def main():
 
     force_set: set[str] = set()
     if args.retry_failed:
-        force_set = load_failed(args.output_dir)
-        if force_set:
-            print(f"Retrying {len(force_set)} previously failed repo(s).")
-        else:
-            print("No failed repos recorded; running normally.")
+        force_set.update(load_failed(args.output_dir, "_failed.txt"))
+    if args.retry_timeout:
+        force_set.update(load_failed(args.output_dir, "_failed_timeout.txt"))
+        
+    if force_set:
+        print(f"Retrying {len(force_set)} previously failed repo(s).")
+    elif args.retry_failed or args.retry_timeout:
+        print("No failed repos recorded; running normally.")
 
     # Partition into to-run vs already-done
     to_run = []
@@ -213,7 +222,8 @@ def main():
                 print("✓")
                 succeeded += 1
                 if repo in force_set:
-                    remove_from_failed(args.output_dir, repo)
+                    remove_from_failed(args.output_dir, repo, "_failed.txt")
+                    remove_from_failed(args.output_dir, repo, "_failed_timeout.txt")
             else:
                 detail = (result.stderr or result.stdout or "").strip()
                 short = detail[:200] + ("…" if len(detail) > 200 else "")
@@ -224,7 +234,7 @@ def main():
         except subprocess.TimeoutExpired:
             print(f"✗ timeout after {args.timeout}s")
             failed += 1
-            append_failed(args.output_dir, repo)
+            append_failed(args.output_dir, repo, "_failed_timeout.txt")
         except FileNotFoundError as e:
             print(f"✗ executable not found: {e}")
             failed += 1
@@ -241,8 +251,8 @@ def main():
     print(f"\n{'=' * 50}")
     print(f"Done. {succeeded} succeeded, {failed} failed.")
     if failed and not args.dry_run:
-        print(f"Failed repos logged to: {args.output_dir / '_failed.txt'}")
-        print("Re-run failures with:  --retry-failed")
+        print(f"Failed repos logged to: {args.output_dir / '_failed.txt'} and _failed_timeout.txt")
+        print("Re-run failures with:  --retry-failed or --retry-timeout")
 
 
 if __name__ == "__main__":
