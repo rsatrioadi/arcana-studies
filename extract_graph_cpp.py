@@ -157,7 +157,7 @@ def main():
         force_set.update(load_failed(args.output_dir, "_failed.txt"))
     if args.retry_timeout:
         force_set.update(load_failed(args.output_dir, "_failed_timeout.txt"))
-        
+
     if force_set:
         print(f"Retrying {len(force_set)} previously failed repo(s).")
     elif args.retry_failed or args.retry_timeout:
@@ -197,10 +197,13 @@ def main():
         out = args.output_dir / f"{repo}.json"
         cmd = [
             str(args.exe.resolve()),
-            "--name", repo,
-            "--format", "cyjson",
+            "--name",
+            repo,
+            "--format",
+            "cyjson",
             "--no-compile-commands",
-            "--output-dir", str(args.output_dir.resolve()),
+            "--output-dir",
+            str(args.output_dir.resolve()),
             str(repo_dir.resolve()),
         ]
 
@@ -226,7 +229,7 @@ def main():
                     remove_from_failed(args.output_dir, repo, "_failed_timeout.txt")
             else:
                 detail = (result.stderr or result.stdout or "").strip()
-                short = detail[:200] + ("…" if len(detail) > 200 else "")
+                short = ("….." + detail[-2000:] if len(detail) > 2000 else detail)
                 print(f"✗ exit {result.returncode}: {short}")
                 failed += 1
                 append_failed(args.output_dir, repo)
@@ -251,7 +254,9 @@ def main():
     print(f"\n{'=' * 50}")
     print(f"Done. {succeeded} succeeded, {failed} failed.")
     if failed and not args.dry_run:
-        print(f"Failed repos logged to: {args.output_dir / '_failed.txt'} and _failed_timeout.txt")
+        print(
+            f"Failed repos logged to: {args.output_dir / '_failed.txt'} and _failed_timeout.txt"
+        )
         print("Re-run failures with:  --retry-failed or --retry-timeout")
 
 
